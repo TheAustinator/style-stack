@@ -1,3 +1,12 @@
+# data
+data/raw
+data/test
+output
+
+# local environment
+.idea/
+Pipfile
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

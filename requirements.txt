@@ -1,4 +1,8 @@
+keras
+numpy
+matplotlib
+keras
+scipy
+scikit-learn
 # To install these Python dependencies, please type:
 # pip install -r requirements.txt
-
-streamlit
