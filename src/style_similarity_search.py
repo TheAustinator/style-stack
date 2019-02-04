@@ -46,13 +46,15 @@ def generate_embeddings(embedding_model, image_paths, log_failures=False):
         if i % 1000 == 0:
             print("analyzing image %d / %d" % (i, len(image_paths)))
         try:
-            image, x = load_image(image_path, embedding_model.input_shape[1:3]);
-            emb = embedding_model.predict(x)[0]
-            embeddings.append(emb)
-            valid_image_paths.append(image_path)  # only keep ones that didnt cause errors
+            _, x = load_image(image_path, embedding_model.input_shape[1:3])
         except Exception as e:
             invalid_image_paths.append(image_path)
             continue
+        else:
+            emb = embedding_model.predict(x)[0]
+            embeddings.append(emb)
+            valid_image_paths.append(image_path)  # only keep ones that didnt cause errors
+
     # TODO: add logging for invalid_images
     print(f'finished extracting {len(embeddings)} embeddings '
           f'for {len(valid_image_paths)} images with {len(invalid_image_paths)} failures')
