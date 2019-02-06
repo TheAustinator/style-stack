@@ -41,6 +41,12 @@ def gram_matrix(x):
 
 
 def build_gram_lib(images_embeddings, layer_list):
+    """
+    
+    :param images_embeddings:
+    :param layer_list:
+    :return:
+    """
     n_embedding_layers = len(layer_list)
     # TODO: make this gram_list_dict
     gram_list_list = [[] for _ in range(n_embedding_layers)]
