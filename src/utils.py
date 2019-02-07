@@ -21,7 +21,7 @@ def load_image(path, target_size):
 def get_image_paths(images_dir):
     image_extensions = ['.jpg', '.png', '.jpeg']
     max_num_images = 10000
-    # shorten with glob
+    # TODO: shorten with glob
     image_paths = [os.path.join(dp, f) for dp, dn, filenames in
                    os.walk(images_dir) for f in filenames if
                    os.path.splitext(f)[1].lower() in image_extensions]

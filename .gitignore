@@ -2,6 +2,7 @@
 data/raw
 data/test
 data/mini
+data/indexes
 output
 
 # local environment
