@@ -173,7 +173,8 @@ def query_gram_lib_index(query_gram_dict, layer_names, index_dict, similarity_we
 
     weighted_dist_dict = {}
     for idx in proximal_indices:
-        weighted_dist = sum([similarity_weights[layer_name] * dist_dict[layer_name][idx] for layer_name in layer_names])
+        weighted_dist = sum([similarity_weights[layer_name] * dist_dict[layer_name][idx] for layer_name in similarity_weights])
+
         weighted_dist_dict[idx] = weighted_dist
 
     print(weighted_dist_dict)
@@ -184,6 +185,7 @@ def query_gram_lib_index(query_gram_dict, layer_names, index_dict, similarity_we
     end = dt.datetime.now()
     index_time = (end - start).microseconds / 1000
     print(f'query time: {index_time} ms')
+    print(results_indices)
     return results_indices
 
 
