@@ -18,17 +18,14 @@ def load_image(path, target_size):
     return img, x
 
 
-def get_image_paths(images_dir):
+def get_image_paths(images_dir, max_num_images=10000):
     image_extensions = ['.jpg', '.png', '.jpeg']
-    max_num_images = 10000
     # TODO: shorten with glob
+    # TODO: change to iterator instead of max_num_images
     image_paths = [os.path.join(dp, f) for dp, dn, filenames in
                    os.walk(images_dir) for f in filenames if
                    os.path.splitext(f)[1].lower() in image_extensions]
-    # image_paths = [
-    #     image_path
-    #     for image_path in random.choice(image_paths), max_num_images, replace = False))
-    # ]
+
     if max_num_images < len(image_paths):
         image_paths = [image_paths[i] for i in sorted(random.sample(
             range(len(image_paths)), max_num_images))]

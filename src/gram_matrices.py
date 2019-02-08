@@ -20,16 +20,7 @@ def load_image(path, target_size):
     return img, x
 
 
-def gen_images_embeddings(image_paths, model):
-    file_mapping = {i: f for i, f in enumerate(image_paths)}
-    inputs = [load_image(path, model.input_shape[1:3])[1] for path in image_paths]
 
-    conv_layers = model.layers[1:-4]
-    layer_names = [layer.name for layer in conv_layers]
-    embedding_layers = [layer.output for layer in conv_layers]
-    functor = K.function([model.input], embedding_layers)
-    images_embeddings = [functor([img, 1]) for img in inputs]
-    return images_embeddings, layer_names, file_mapping
 
 
 def gram_matrix(x):
@@ -118,7 +109,7 @@ def build_gram_lib_index(images_embeddings, layer_names, buffer_size):
     return index_dict
 
 
-def save_gram_lib(index_dict, image_paths, lib_name):
+def save_gram_lib(index_dict, file_mapping, lib_name):
     output_dir = f'../data/indexes/{lib_name}/'
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -127,7 +118,6 @@ def save_gram_lib(index_dict, image_paths, lib_name):
         filepath = os.path.join(output_dir, filename)
         faiss.write_index(index, filepath)
 
-    file_mapping = {i: path for i, path in enumerate(image_paths)}
     filename = 'file_mapping.json'
     filepath = os.path.join(output_dir, filename)
     with open(filepath, 'w') as f:
