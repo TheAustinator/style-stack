@@ -13,8 +13,8 @@ from utils import load_image, get_image_paths
 
 
 class GramStack:
-    def __init__(self, *args):
-        pass
+    def __init__(self):
+        self.file_mapping = None
 
     @classmethod
     def build(cls, image_dir, model, layer_range):
@@ -24,8 +24,8 @@ class GramStack:
         inst.model = model
         inst.layer_range = layer_range
         inst._build_image_embedder([1, -4])
-        lib_embeddings = inst._embed_library(image_paths)
-        inst._build_index(lib_embeddings, buffer_size=1000)
+        inst._embedding_gen = inst._gen_lib_embeddings(image_paths)
+        inst._build_index(inst._embedding_gen, buffer_size=1000)
         return inst
 
     @classmethod
@@ -90,7 +90,7 @@ class GramStack:
     def query(self, image_path, n_results, embedding_weights, write_output=True):
         # TODO: refactor
         # TODO: create seperate query class, which has attributes like distances by layer, etc. This will be cleaner and allow sliders without re-running query
-        query_embeddings = self._embed_query(image_path)
+        query_embeddings = self._embed_image(image_path)
         query_gram_dict = self._build_query_gram_dict(query_embeddings)
 
         start = dt.datetime.now()
@@ -148,6 +148,18 @@ class GramStack:
                 json.dump(results, f)
         return results
 
+    @property
+    def file_mapping(self):
+        if self._file_mapping:
+            pass
+        else:
+            self._file_mapping = {i: f for i, f in enumerate(self.valid_paths)}
+        return self._file_mapping
+
+    @file_mapping.setter
+    def file_mapping(self, value):
+        self._file_mapping = value
+
     @staticmethod
     def gram_matrix(x):
         if np.ndim(x) == 4 and x.shape[0] == 1:
@@ -165,34 +177,31 @@ class GramStack:
         embedding_layers = [layer.output for layer in conv_layers]
         self.embedder = K.function([self.model.input], embedding_layers)
 
-    def _embed_library(self, image_paths):
-        inputs = []
-        valid_paths = []
+    def _gen_lib_embeddings(self, image_paths):
+        self.valid_paths = []
         self.invalid_paths = []
         for path in image_paths:
             try:
-                _, x = load_image(path, self.model.input_shape[1:3])
-                inputs.append(x)
-                valid_paths.append(path)
+                image_embeddings = self._embed_image(path)
+                self.valid_paths.append(path)
+                yield image_embeddings
+
             except Exception as e:
                 self.invalid_paths.append(path)
+                continue
 
-        self.file_mapping = {i: f for i, f in enumerate(valid_paths)}
-        lib_embeddings = [self.embedder([x, 1]) for x in inputs]
-        return lib_embeddings
-
-    def _embed_query(self, image_path):
+    def _embed_image(self, image_path):
         _, x = load_image(image_path, self.model.input_shape[1:3])
-        query_embeddings = self.embedder([x, 1])
-        return query_embeddings
+        image_embeddings = self.embedder([x, 1])
+        return image_embeddings
 
     # TODO: split into gen_gram_matrices and _build_index, then combine gen_gram_matrices with build_query_gram_dict
-    def _build_index(self, images_embeddings, buffer_size=1000):
+    def _build_index(self, img_embedding_gen, buffer_size=100):
         start = dt.datetime.now()
         self.index_dict = {}
         self.gram_list_buffer = [[] for _ in range(len(self.layer_names))]
 
-        for i, img_embeddings in enumerate(images_embeddings):
+        for i, img_embeddings in enumerate(img_embedding_gen):
 
             for k, emb in enumerate(img_embeddings):
                 gram = self.gram_matrix(emb)
