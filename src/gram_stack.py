@@ -87,7 +87,7 @@ class GramStack:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f)
 
-    def query(self, image_path, n_results, embedding_weights, output='json'):
+    def query(self, image_path, n_results, embedding_weights, write_output=True):
         # TODO: refactor
         # TODO: create seperate query class, which has attributes like distances by layer, etc. This will be cleaner and allow sliders without re-running query
         query_embeddings = self._embed_query(image_path)
@@ -141,10 +141,12 @@ class GramStack:
             'n_images': len(self.file_mapping),
             'invalid_paths': self.invalid_paths,
         }
-        timestamp = str(dt.datetime.now())
-        output_file = f'../output/results-{timestamp}'
-        with open(output_file, 'w') as f:
-            json.dump(results, f)
+        if write_output:
+            timestamp = str(dt.datetime.now())
+            output_file = f'../output/results-{timestamp}'
+            with open(output_file, 'w') as f:
+                json.dump(results, f)
+        return results
 
     @staticmethod
     def gram_matrix(x):

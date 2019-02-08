@@ -12,7 +12,7 @@ def build_index_example():
     # parameters
     image_dir = '../data/test'
     model = VGG16(weights='imagenet', include_top=True)
-    layer_range = (1, -4) # TODO: error handling around wrong layers specified
+    layer_range = (1, -4)
     lib_name = 'test_1'
 
     # build
@@ -37,7 +37,8 @@ def load_and_query_example():
     stack = GramStack.load(lib_name, layer_range)
 
     # query
-    results = stack.query(query_path, n_results, embedding_weights)
+    results = stack.query(query_path, n_results, embedding_weights,
+                          write_output=False)
     print(results)
 
 
