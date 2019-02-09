@@ -7,8 +7,8 @@ from gram_stack import GramStack
 def main():
     # build parameters
     image_dir = '../data/test'
-    model = VGG16(weights='imagenet', include_top=True)
-    layer_range = (1, -4)
+    model = VGG16(weights='imagenet', include_top=False)
+    layer_range = 'all'
     lib_name = 'test'
     n_results = 10
 
