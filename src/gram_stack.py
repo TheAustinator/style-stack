@@ -51,7 +51,9 @@ class GramStack:
         >>>             embedding_weights=embedding_weights, write_output=True)
     """
     def __init__(self):
-        self._file_mapping = None
+        self.file_mapping = None
+        self.valid_paths = []
+        self.invalid_paths = []
 
     @classmethod
     def build(cls, image_dir, model, layer_range):
@@ -211,7 +213,10 @@ class GramStack:
         }
         if write_output:
             timestamp = str(dt.datetime.now())
-            output_file = f'../output/results-{timestamp}'
+            output_dir = f'../output/'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            output_file = os.path.join(output_dir, f'results-{timestamp}')
             with open(output_file, 'w') as f:
                 json.dump(results, f)
         return results
@@ -256,8 +261,6 @@ class GramStack:
 
     # TODO: output successful embeddings to make resumable
     def _gen_lib_embeddings(self, image_paths):
-        self.valid_paths = []
-        self.invalid_paths = []
         for path in image_paths:
             try:
                 image_embeddings = self._embed_image(path)
@@ -266,6 +269,7 @@ class GramStack:
 
             except Exception as e:
                 # TODO: add logging
+                print(f'Error on {path}: {e}')
                 self.invalid_paths.append(path)
                 continue
 
