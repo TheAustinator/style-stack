@@ -54,9 +54,10 @@ class GramStack:
         self.file_mapping = None
         self.valid_paths = []
         self.invalid_paths = []
+        self.lib_name = None
 
     @classmethod
-    def build(cls, image_dir, model, layer_range):
+    def build(cls, image_dir, model, layer_range, buffer_size=25):
         """
         Use this constructor when you do not have a preexisting gram matrix
         library built by another instance of `GramStack`.
@@ -75,12 +76,13 @@ class GramStack:
             model (keras.engine.training.Model): model from which to extract
                 embeddings.
 
-            layer_range (str, iterable[str]): 'all' uses all layers except for
-                input. Note that the gram matrix computations do not work on
-                dense layers, so if the model has dense layers, it should be
-                loaded with `include_top=False`. Alternatively, an iterable
-                with the first and last desired layer names will inclusively use
-                all of the layers between the first and last layers.
+            layer_range (None, iterable[str]): A two item iterable containing the
+                desired first and last layer names to be inclusively used as
+                layer selection bounds. Alternatively, `None` uses all layers
+                except for input. Note that the gram matrix computations do not
+                work on dense layers, so if the model has dense layers, they
+                should be excluded with this argument or loaded with
+                `include_top=False` in keras.
 
         Returns:
             inst (cls): instance of `cls` built from the gram matrices of the
@@ -94,7 +96,7 @@ class GramStack:
         inst.model = model
         inst._build_image_embedder(layer_range)
         inst._embedding_gen = inst._gen_lib_embeddings(image_paths)
-        inst._build_index(inst._embedding_gen, buffer_size=1000)
+        inst._build_index(inst._embedding_gen, buffer_size=buffer_size)
         return inst
 
     @classmethod
@@ -222,6 +224,14 @@ class GramStack:
         return results
 
     @property
+    def save_exists(self):
+        # TODO: check whether there are files in data/indexes
+        if self.lib_name:
+            return True
+        else:
+            return False
+
+    @property
     def file_mapping(self):
         if self._file_mapping:
             pass
@@ -234,27 +244,31 @@ class GramStack:
         self._file_mapping = value
 
     @staticmethod
-    def gram_matrix(x):
+    def gram_vector(x):
         if np.ndim(x) == 4 and x.shape[0] == 1:
             x = x[0, :]
         elif np.ndim != 3:
             # TODO: make my own error
             raise ValueError(f'')
         x = x.reshape(x.shape[-1], -1)
-        gram = np.dot(x, np.transpose(x))
-        return gram
+        gram_mat = np.dot(x, np.transpose(x))
+        mask = np.triu_indices(len(gram_mat), 1)
+        gram_mat[mask] = None
+        gram_vec = gram_mat.flatten()
+        gram_vec = gram_vec[~np.isnan(gram_vec)]
+        return gram_vec
 
-    def _build_image_embedder(self, layer_range):
+    def _build_image_embedder(self, layer_range=None):
         layer_names = [layer.name for layer in self.model.layers]
-        if layer_range == 'all':
-            chosen_layer_names = layer_names[1:]
-            chosen_layers = self.model.layers[1:]
-        else:
+        if layer_range:
             slice_start = layer_names.index([layer_range[0]])
             slice_end = layer_names.index([layer_range[1]]) + 1
             chosen_layer_names = layer_names[slice_start:slice_end]
             chosen_layers = [layer for layer in self.model.layers
                              if layer.name in chosen_layer_names]
+        else:
+            chosen_layer_names = layer_names[1:]
+            chosen_layers = self.model.layers[1:]
         self.layer_names = chosen_layer_names
         embedding_layers = [layer.output for layer in chosen_layers]
         self.embedder = K.function([self.model.input], embedding_layers)
@@ -269,7 +283,7 @@ class GramStack:
 
             except Exception as e:
                 # TODO: add logging
-                print(f'Error on {path}: {e}')
+                print(f'Embedding error: {e.args}')
                 self.invalid_paths.append(path)
                 continue
 
@@ -283,23 +297,23 @@ class GramStack:
         return image_embeddings
 
     # TODO: split into gen_gram_matrices and _build_index, then combine gen_gram_matrices with build_query_gram_dict
-    def _build_index(self, img_embedding_gen, buffer_size=100):
+    def _build_index(self, img_embedding_gen, buffer_size=25):
         start = dt.datetime.now()
         self.index_dict = {}
         self.gram_list_buffer = [[] for _ in range(len(self.layer_names))]
         for i, img_embeddings in enumerate(img_embedding_gen):
 
             for k, emb in enumerate(img_embeddings):
-                gram = self.gram_matrix(emb)
-                gram_flat = gram.flatten()
-                self.gram_list_buffer[k].append(gram_flat)
+                gram_vec = self.gram_vector(emb)
+                self.gram_list_buffer[k].append(gram_vec)
 
                 if i == 0:
-                    d = len(gram_flat)
+                    d = len(gram_vec)
                     self.index_dict[f'{self.layer_names[k]}'] = faiss.IndexFlatL2(d)
 
             if i % buffer_size == 0 and i > 0:
                 self._index_buffer()
+                print(f'images {i - buffer_size} - {i} indexed')
 
         if self.gram_list_buffer:
             self._index_buffer()
@@ -317,11 +331,47 @@ class GramStack:
             self.index_dict[self.layer_names[j]].add(gram_block)
             self.gram_list_buffer = [[] for _ in range(len(self.gram_list_buffer))]
 
+    """
+    def _index_and_save_buffer(self, lib_name):
+        # prepare gram matrices for indexing
+        for j, gram_list in enumerate(self.gram_list_buffer):
+            gram_block = np.stack(gram_list)
+            self.index_dict[self.layer_names[j]].add(gram_block)
+            self.gram_list_buffer = [[] for _ in range(len(self.gram_list_buffer))]
+
+        if not self.save_exists:
+            self.lib_name = lib_name
+            output_dir = f'../data/indexes/{lib_name}/'
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            for layer_name, index in self.index_dict.items():
+                filename = f'grams-{layer_name}.index'
+                filepath = os.path.join(output_dir, filename)
+                faiss.write_index(index, filepath)
+
+                # save metadata
+                metadata = {
+                    'model': self.model.name,
+                    'layer_names': self.layer_names,
+                }
+                metadata_path = os.path.join(output_dir, 'meta.json')
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f)
+
+        elif self.save_exists:
+            for layer_name, index in self.index_dict.items():
+                filename = f'grams-{layer_name}.index'
+                filepath = os.path.join(output_dir, filename)
+                faiss.write_index(index, filepath)
+    """
+
+
+
+
     def _build_query_gram_dict(self, img_embeddings):
         gram_dict = {}
         for i, emb in enumerate(img_embeddings):
-            gram = self.gram_matrix(emb)
-            gram_flat = gram.flatten()
-            gram_exp = np.expand_dims(gram_flat, axis=0)
-            gram_dict[self.layer_names[i]] = gram_exp
+            gram_vec = self.gram_vector(emb)
+            gram_vec = np.expand_dims(gram_vec, axis=0)
+            gram_dict[self.layer_names[i]] = gram_vec
         return gram_dict

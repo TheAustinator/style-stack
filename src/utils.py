@@ -1,8 +1,6 @@
-
+import json
 from keras.applications.imagenet_utils import preprocess_input
 from keras.preprocessing import image
-
-from keras.applications import vgg16
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -33,20 +31,32 @@ def get_image_paths(images_dir, max_num_images=10000):
     return image_paths
 
 
-def get_concatenated_images(valid_imgs, indexes, thumb_height=100):
+def get_concatenated_images(indexes, image_paths, thumb_height):
     thumbs = []
     for idx in indexes:
-        img = image.load_img(valid_imgs[idx])
+        img = image.load_img(image_paths[idx])
         img = img.resize((int(img.width * thumb_height / img.height), thumb_height))
         thumbs.append(img)
     concat_image = np.concatenate([np.asarray(t) for t in thumbs], axis=1)
     return concat_image
 
 
-def plot_results(query_img_idx, query_img, results_indices, results_img):
+def plot_results(results_filename, results_dir='../output/'):
+    with open(os.path.join(results_dir, results_filename)) as f:
+        json_str = json.load(f)
+        results = {str(k): v for k, v in json_str.items()}
+    results_files = results['results_files'].values()
+    model = results['model']
+    similarity_weights = results['similarity_weights']
+    lib_name = results['lib_name']
+    n_images = results['n_images']
+    query_img_path = results['query_img']
+
+    query_img = image.load_img(query_img_path)
+
     plt.figure(figsize=(5, 5))
     plt.imshow(query_img)
-    plt.title(f'query image {query_img_idx}')
+    plt.title(f'query image')
 
     plt.figure(figsize=(16, 12))
     plt.imshow(results_img)

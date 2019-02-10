@@ -3,10 +3,11 @@ from keras.applications.vgg16 import VGG16
 
 from gram_stack import GramStack
 
+# add hypothesis testing
 
 def main():
     # build parameters
-    image_dir = '../data/raw'
+    image_dir = '../data/test'
     model = VGG16(weights='imagenet', include_top=False)
     layer_range = None
     lib_name = 'raw'
