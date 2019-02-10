@@ -1,7 +1,8 @@
-# Insight_Project_Framework
-Framework for machine learning projects at Insight Data Science.
+# Style Stack
+A library for scalable style similarity search for art and design images.
+Note: Readme under construction
 
-## Motivation for this project format:
+## Contents
 - **Insight_Project_Framework** : Put all source code for production within structured directory
 - **tests** : Put all source code for testing in an easy to find location
 - **configs** : Enable modification of all preset variables within single directory (consisting of one or many config files for separate tasks)
@@ -9,47 +10,62 @@ Framework for machine learning projects at Insight Data Science.
 - **build** : Include scripts that automate building of a standalone environment
 - **static** : Any images or content to include in the README or web framework if part of the pipeline
 
-## Setup
-Clone repository and update python path
+## Usage
+### Build `GramStack`
+Import `GramStack` and choose a model from `keras.applications`
+```python
+from keras.applications.vgg16 import VGG16
+from stylestack.gram_stack import GramStack
 ```
-repo_name=Insight_Project_Framework # URL of your new repository
-username=mrubash1 # Username for your personal github account
-git clone https://github.com/$username/$repo_name
-cd $repo_name
-echo "export $repo_name=${PWD}" >> ~/.bash_profile
-echo "export PYTHONPATH=$repo_name/src:${PYTHONPATH}" >> ~/.bash_profile
-source ~/.bash_profile
+Set up arguments
+```python
+image_dir = '../data/my_data'
+model = VGG16(weights='imagenet', include_top=False)
+layer_range = ('block1_conv1', 'block2_pool')
 ```
-Create new development branch and switch onto it
+Build `GramStack`
+```python
+stack = GramStack.build(image_dir, model, layer_range)
 ```
-branch_name=dev-readme_requisites-20180905 # Name of development branch, of the form 'dev-feature_name-date_of_creation'}}
-git checkout -b $branch_name
+### Query `GramStack`
+Set weighting for embedding layers in similarity search. Any layers not specified will be weighted as 0, or all layers can be used by specifying `None`.
+```python
+embedding_weights = {
+    'block1_conv1': 1,
+    'block3_conv2': 0.5,
+    'block3_pool': .25
+}
 ```
-
-## Initial Commit
-Lets start with a blank slate: remove `.git` and re initialize the repo
+Set other arguments. Use `write_output` to output results JSON to `/output/`.
+```python
+image_path = '../data/my_data/cat_painting.jpg'
+n_results = 5
+write_output = True
 ```
-cd $repo_name
-rm -rf .git   
-git init   
-git status
-```  
-You'll see a list of file, these are files that git doesn't recognize. At this point, feel free to change the directory names to match your project. i.e. change the parent directory Insight_Project_Framework and the project directory Insight_Project_Framework:
-Now commit these:
+Query `GramStack`
+```python
+results = stack.query(image_path, embedding_weights, n_results, write_output)
 ```
-git add .
-git commit -m "Initial commit"
-git push origin $branch_name
+### Save to disk
 ```
+stack.save(lib_name='my_data')
+```
+### Load from disk
+```
+GramStack.load(lib_name='my_data')
+```
+Once the `GramStack` is loaded, it can be queried and behaves the same as when it was built.
 
 ## Requisites
 
-- List all packages and software needed to build the environment
-- This could include cloud command line tools (i.e. gsutil), package managers (i.e. conda), etc.
+- conda
 
 #### Dependencies
 
 - [Streamlit](streamlit.io)
+- [faiss](https://github.com/facebookresearch/faiss/wiki)
+- [matplotlib](https://matplotlib.org/)
+- [pillow](https://python-pillow.org/)
 
 #### Installation
 To install the package above, pleae run:
