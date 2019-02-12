@@ -4,6 +4,7 @@ import glob
 import json
 import keras.applications as apps
 import keras.backend as K
+from math import ceil
 import numpy as np
 import os
 import random
@@ -12,60 +13,83 @@ import re
 from utils import load_image, get_image_paths
 
 
-class GramStack:
+class StyleStack:
     """
     This class is used to do style similarity search of a query image against
     a libaray of images. The search uses the l2 difference between the gram
     matrices of user-selected embeddings from a user specified convolutional
     network. The similarity search uses Facebook AI Research's faiss library
-    to for speed and scalability, and the `GramStack` class acts as a high level
+    to for speed and scalability, and the `StyleStack` class acts as a high level
     ORM to the index.
 
-    The class is constructed via the `GramStack.build` constructor to build a
-    new set of indexes from raw images, or the `GramStack.load` constructor to
-    load a set of indexes from disk. More images can always be added to an
-    existing index using the `add` method on an instance of `GramStack`. The
-    `query` method is used to get the filepaths of the most similar images. The
-    weighting of different layer embeddings in the similarity search can be
-    adjusted at query time.
+    This class is not instantiated directly, but constructed via either the
+    `StyleStack.build` class method to build a new set of indexes from raw
+    images, or the `StyleStack.load` constructor to load a set of indexes from
+    disk. More images can always be added to an existing index using the `add`
+    method on an instance of `StyleStack`. The `query` method is used to get the
+    filepaths of the most similar images. The weighting of different layer
+    embeddings in the similarity search can be adjusted at query time.
 
     Example:
-        Building a GramStack
+        Building a StyleStack
         >>> image_dir = '../data/my_data'
         >>> model = apps.vgg16.VGG16(weights='imagenet', include_top=False)
         >>> layer_range = ('block1_conv1', 'block2_pool')
-        >>> stack = GramStack.build(image_dir, model, layer_range)
+        >>> stack = StyleStack.build(image_dir, model, layer_range)
         Saving
         >>> lib_name = 'library_name'
         >>> stack.save(lib_name)
         Loading
-        >>> stack = GramStack.load(lib_name)
+        >>> stack = StyleStack.load(lib_name)
         Querying
         >>> # any embeddings not in embedding_weights will not be used
+        >>> image_path = '../data/my_data/cat_painting.jpg'
         >>> embedding_weights = {
         >>>     'block1_conv1': 1,
         >>>     'block3_conv2': 0.5,
         >>>     'block3_pool': .25
-        >>>     }
-        >>> stack.query('../data/my_data/cat_painting.jpg', n_results=5,
-        >>>             embedding_weights=embedding_weights, write_output=True)
+        >>> }
+        >>> n_results = 5
+        >>> results = stack.query(image_path, n_results, embedding_weights,
+        >>>                       write_output=True)
     """
+
+    models = {
+        'densenet121': apps.densenet.DenseNet121,
+        'densenet169': apps.densenet.DenseNet169,
+        'densenet201': apps.densenet.DenseNet201,
+        'inceptionv3': apps.inception_v3.InceptionV3,
+        'inceptionresnetv2': apps.inception_resnet_v2.InceptionResNetV2,
+        'mobilenet': apps.mobilenet.MobileNet,
+        'mobilenetv2': apps.mobilenet_v2.MobileNetV2,
+        'nasnetlarge': apps.nasnet.NASNetLarge,
+        'nasnetmobile': apps.nasnet.NASNetMobile,
+        'resnet50': apps.resnet50.ResNet50,
+        'vgg16': apps.vgg16.VGG16,
+        'vgg19': apps.vgg19.VGG19,
+        'xception': apps.xception.Xception,
+    }
+
     def __init__(self):
-        self.file_mapping = None
         self.valid_paths = []
         self.invalid_paths = []
         self.lib_name = None
+        self.vector_buffer_size = None
+        self.index_buffer_size = None
+        self._file_mapping = None
+        self._partitioned = None
 
     @classmethod
-    def build(cls, image_dir, model, layer_range, buffer_size=25):
+    def build(cls, image_dir, model, layer_range, vector_buffer_size=100,
+              index_buffer_size=6500):
         """
         Use this constructor when you do not have a preexisting gram matrix
-        library built by another instance of `GramStack`.
+        library built by another instance of `StyleStack`.
 
-        This is the first of two constructors for `GramStack`, which builds a
+        This is the first of two constructors for `StyleStack`, which builds a
         set of faiss indexes, one for each embedding layer of the model. Each
         index is specific to the model and layer that were used to embed it, so
-        a new `GramStack` should be built if the `model` is changed or if
+        a new `StyleStack` should be built if the `model` is changed or if
         any of the layers used to `query` are not in `layer_range` of the prior
         gram matrix library. However, if the layers used to query are a subset
         of `layer_range` and the `model` and images are the same, use `load`.
@@ -84,6 +108,18 @@ class GramStack:
                 should be excluded with this argument or loaded with
                 `include_top=False` in keras.
 
+            vector_buffer_size (int): number of embeddings to load into memory
+                before indexing them. Reduce this if your system runs out of
+                memory before printouts that some items have been indexed.
+
+            index_buffer_size (int): number of files to index before forcing indexes
+                to be saved to disk. If the number of image files is less than
+                this, than the indexes will be held in memory. Otherwise, the
+                partitioned indexes are automatically saved to disk when they
+                reach the size of `index_buffer_size`. Reduce this when running
+                out of memory subsequent to printouts that some items have been
+                indexed.
+
         Returns:
             inst (cls): instance of `cls` built from the gram matrices of the
                 embeddings generated by the layers of the `model` specified by
@@ -92,40 +128,72 @@ class GramStack:
         """
         inst = cls()
         inst.lib_name = None
+        inst.vector_buffer_size = vector_buffer_size
+        inst.index_buffer_size = index_buffer_size
         image_paths = get_image_paths(image_dir)
         inst.model = model
         inst._build_image_embedder(layer_range)
         inst._embedding_gen = inst._gen_lib_embeddings(image_paths)
-        inst._build_index(inst._embedding_gen, buffer_size=buffer_size)
+        inst._build_index(inst._embedding_gen)
         return inst
 
     @classmethod
-    def load(cls, lib_name, layer_range):
+    def load(cls, lib_name, layer_range, model=None):
+        """
+
+        Args:
+            lib_name:
+
+            layer_range:
+
+            model: Model to embed query images. It must be the same as the model
+                used to embed the reference library. If `None`, the model name
+                will be gathered from the metadata, and it will be loaded from
+                `keras.applications` with `weights='imagenet'` and
+                `include_top=False`. If the model used to build the original
+                `StyleStack` is not part of `keras.applications` or did not use
+                imagenet weights, the model will not be generated correctly from
+                metadata and must be passed in via this argument
+
+        Returns:
+
+        """
         input_dir = f'../data/indexes/{lib_name}/'
         inst = cls()
         cls.lib_name = lib_name
 
-        # all images must have loaded successfully at index build
+        # invalid paths have already been filtered out
         inst.invalid_paths = None
 
         # load metadata
         with open(os.path.join(input_dir, 'meta.json')) as f:
             json_str = json.load(f)
             metadata = {str(k): v for k, v in json_str.items()}
-            if metadata['model'].lower() == 'vgg16':
-                inst.model = apps.vgg16.VGG16(weights='imagenet',
-                                              include_top=False)
+        if model is None:
+            model_str = metadata['model']
+            model_cls = StyleStack.models[model_str]
+            model = model_cls(weights='imagenet', include_top=False)
 
         # load file mapping
         with open(os.path.join(input_dir, 'file_mapping.json')) as f:
             json_str = json.load(f)
             inst.file_mapping = {int(k): str(v) for k, v in json_str.items()}
 
-
         # load gram matrix indexes
-        gram_layer_files = glob.glob(os.path.join(input_dir, 'grams-*.index'))
+        index_paths = glob.glob(os.path.join(input_dir, 'grams-*.index'))
+
+        # check for partitioning
+        if 'part' in index_paths[0]:
+            inst.partitioned = True
+
+        # TODO: finish this
+        if inst.partitioned:
+            partition_dict = {
+
+            }
+
         inst.index_dict = {}
-        for f in gram_layer_files:
+        for f in index_paths:
             index = faiss.read_index(f)
             layer_name = re.search(f'{input_dir}grams-(.+?)\.index', f).group(1)
             inst.index_dict.update({layer_name: index})
@@ -159,7 +227,8 @@ class GramStack:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f)
 
-    def query(self, image_path, n_results, embedding_weights, write_output=True):
+    def query(self, image_path, embedding_weights=None, n_results=5,
+              write_output=True):
         # TODO: refactor
         # TODO: create seperate query class, which has attributes like distances by layer, etc. This will be cleaner and allow sliders without re-running query
         query_embeddings = self._embed_image(image_path)
@@ -203,7 +272,7 @@ class GramStack:
         index_time = (end - start).microseconds / 1000
         print(f'query time: {index_time} ms')
         print(results_indices)
-        results_files = {i: self.file_mapping[i] for i in results_indices}
+        results_files = [self.file_mapping[i] for i in results_indices]
         results = {
             'query_img': image_path,
             'results_files': results_files,
@@ -224,12 +293,28 @@ class GramStack:
         return results
 
     @property
-    def save_exists(self):
-        # TODO: check whether there are files in data/indexes
-        if self.lib_name:
-            return True
+    def metadata(self):
+        return {
+            'model': self.model.name,
+            'layer_names': self.layer_names,
+            'paritioned': self.partitioned,
+        }
+
+    @property
+    def partitioned(self):
+        if self._partitioned is None:
+            input_dir = f'../data/indexes/{self.lib_name}/'
+            indexes = glob.glob(os.path.join(input_dir, 'grams-*.index'))
+            if 'part' in indexes[0]:
+                return True
+            else:
+                return False
         else:
-            return False
+            return self._partitioned
+
+    @partitioned.setter
+    def partitioned(self):
+
 
     @property
     def file_mapping(self):
@@ -257,6 +342,14 @@ class GramStack:
         gram_vec = gram_mat.flatten()
         gram_vec = gram_vec[~np.isnan(gram_vec)]
         return gram_vec
+
+    def _build_query_gram_dict(self, img_embeddings):
+        gram_dict = {}
+        for i, emb in enumerate(img_embeddings):
+            gram_vec = self.gram_vector(emb)
+            gram_vec = np.expand_dims(gram_vec, axis=0)
+            gram_dict[self.layer_names[i]] = gram_vec
+        return gram_dict
 
     def _build_image_embedder(self, layer_range=None):
         layer_names = [layer.name for layer in self.model.layers]
@@ -297,81 +390,72 @@ class GramStack:
         return image_embeddings
 
     # TODO: split into gen_gram_matrices and _build_index, then combine gen_gram_matrices with build_query_gram_dict
-    def _build_index(self, img_embedding_gen, buffer_size=25):
+    def _build_index(self, img_embedding_gen):
         start = dt.datetime.now()
+        in_memory = True
+        part_num = 0
         self.index_dict = {}
-        self.gram_list_buffer = [[] for _ in range(len(self.layer_names))]
+        self.vector_buffer = [[] for _ in range(len(self.layer_names))]
         for i, img_embeddings in enumerate(img_embedding_gen):
 
             for k, emb in enumerate(img_embeddings):
                 gram_vec = self.gram_vector(emb)
-                self.gram_list_buffer[k].append(gram_vec)
+                self.vector_buffer[k].append(gram_vec)
 
                 if i == 0:
                     d = len(gram_vec)
-                    self.index_dict[f'{self.layer_names[k]}'] = faiss.IndexFlatL2(d)
+                    self.index_dict[f'{self.layer_names[k]}'] = \
+                        faiss.IndexFlatL2(d)
 
-            if i % buffer_size == 0 and i > 0:
-                self._index_buffer()
-                print(f'images {i - buffer_size} - {i} indexed')
+            if i % self.vector_buffer_size == 0 and i > 0:
+                self._index_vectors()
+                print(f'images {i - self.vector_buffer_size} - {i} indexed')
 
-        if self.gram_list_buffer:
-            self._index_buffer()
+            if i % self.index_buffer_size == 0 and i > 0:
+                in_memory = False
+                part_num = ceil(i / self.index_buffer_size)
+                self._save_indexes(self.lib_name, part_num)
+
+        if self.vector_buffer:
+            self._index_vectors()
+            if not in_memory:
+                part_num += 1
+                self._save_indexes(self.lib_name, part_num)
+
         end = dt.datetime.now()
         index_time = (end - start).microseconds / 1000
         print(f'index time: {index_time} ms')
 
-    def _index_buffer(self):
+    def _index_vectors(self):
         """
-        Helper method to move data from buffer to index when `buffer_size` is
-        reached
+        Helper method to move data from buffer to index when
+        `vector_buffer_size` is reached
         """
-        for j, gram_list in enumerate(self.gram_list_buffer):
+        for j, gram_list in enumerate(self.vector_buffer):
             gram_block = np.stack(gram_list)
             self.index_dict[self.layer_names[j]].add(gram_block)
-            self.gram_list_buffer = [[] for _ in range(len(self.gram_list_buffer))]
+            self.vector_buffer = [[] for _ in range(len(self.vector_buffer))]
 
-    """
-    def _index_and_save_buffer(self, lib_name):
-        # prepare gram matrices for indexing
-        for j, gram_list in enumerate(self.gram_list_buffer):
-            gram_block = np.stack(gram_list)
-            self.index_dict[self.layer_names[j]].add(gram_block)
-            self.gram_list_buffer = [[] for _ in range(len(self.gram_list_buffer))]
+    def _save_indexes(self, lib_name, part_num):
+        if self.vector_buffer:
+            self._index_vectors()
 
-        if not self.save_exists:
-            self.lib_name = lib_name
-            output_dir = f'../data/indexes/{lib_name}/'
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            for layer_name, index in self.index_dict.items():
-                filename = f'grams-{layer_name}.index'
-                filepath = os.path.join(output_dir, filename)
-                faiss.write_index(index, filepath)
+        self.lib_name = lib_name
+        output_dir = f'../data/indexes/{lib_name}/'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        for layer_name, index in self.index_dict.items():
+            filename = f'grams-{layer_name}-part_{part_num}.index'
+            filepath = os.path.join(output_dir, filename)
+            faiss.write_index(index, filepath)
+            self.index_dict = {}
 
-                # save metadata
-                metadata = {
-                    'model': self.model.name,
-                    'layer_names': self.layer_names,
-                }
-                metadata_path = os.path.join(output_dir, 'meta.json')
-                with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f)
-
-        elif self.save_exists:
-            for layer_name, index in self.index_dict.items():
-                filename = f'grams-{layer_name}.index'
-                filepath = os.path.join(output_dir, filename)
-                faiss.write_index(index, filepath)
-    """
-
-
-
-
-    def _build_query_gram_dict(self, img_embeddings):
-        gram_dict = {}
-        for i, emb in enumerate(img_embeddings):
-            gram_vec = self.gram_vector(emb)
-            gram_vec = np.expand_dims(gram_vec, axis=0)
-            gram_dict[self.layer_names[i]] = gram_vec
-        return gram_dict
+        # save metadata
+        if part_num == 1:
+            metadata = {
+                'model': self.model.name,
+                'layer_names': self.layer_names,
+            }
+            metadata_path = os.path.join(output_dir, 'meta.json')
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f)
