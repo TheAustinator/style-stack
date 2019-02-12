@@ -1,6 +1,6 @@
 from keras.applications.vgg16 import VGG16
 
-from gram_stack import GramStack
+from gram_stack import StyleStack
 
 
 def main():
@@ -16,7 +16,7 @@ def build_index_example():
     lib_name = 'test_1'
 
     # build
-    stack = GramStack.build(image_dir, model, layer_range)
+    stack = StyleStack.build(image_dir, model, layer_range)
 
     # save to disk
     stack.save(lib_name)
@@ -34,10 +34,10 @@ def load_and_query_example():
     }
 
     # load from disk
-    stack = GramStack.load(lib_name, layer_range)
+    stack = StyleStack.load(lib_name, layer_range)
 
     # query
-    results = stack.query(query_path, n_results, embedding_weights,
+    results = stack.query(query_path, embedding_weights, n_results,
                           write_output=False)
     print(results)
 

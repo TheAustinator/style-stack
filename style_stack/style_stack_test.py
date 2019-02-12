@@ -1,10 +1,11 @@
 from itertools import product
 from keras.applications.vgg16 import VGG16
 
-from ..style_stack.style_stack import StyleStack
-from ..style_stack.utils import plot_results
+from style_stack import StyleStack
+from utils import plot_results
 
 # TODO: add hypothesis and pytest testing
+# TODO: package and move to tests dir
 
 
 def main():
@@ -20,7 +21,7 @@ def main():
     del stack
     stack = StyleStack.load(lib_name)
     query_image = '../data/raw/735971-close-pins__cpin.png'
-    results = stack.query(query_image, n_results, write_output=True)
+    results = stack.query(query_image, None, n_results, write_output=True)
     plot_results(results)
 
 

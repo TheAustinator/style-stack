@@ -1,19 +1,122 @@
+from abc import ABC, abstractclassmethod, abstractmethod
 import datetime as dt
 import faiss
 import glob
+import joblib as job
 import json
 import keras.applications as apps
 import keras.backend as K
 from math import ceil
 import numpy as np
 import os
+import pickle
+from sklearn.decomposition import PCA
 import random
 import re
 
 from utils import load_image, get_image_paths
 
 
-class StyleStack:
+class Stack(ABC):
+    models = {
+        'densenet121': apps.densenet.DenseNet121,
+        'densenet169': apps.densenet.DenseNet169,
+        'densenet201': apps.densenet.DenseNet201,
+        'inceptionv3': apps.inception_v3.InceptionV3,
+        'inceptionresnetv2': apps.inception_resnet_v2.InceptionResNetV2,
+        'mobilenet': apps.mobilenet.MobileNet,
+        'mobilenetv2': apps.mobilenet_v2.MobileNetV2,
+        'nasnetlarge': apps.nasnet.NASNetLarge,
+        'nasnetmobile': apps.nasnet.NASNetMobile,
+        'resnet50': apps.resnet50.ResNet50,
+        'vgg16': apps.vgg16.VGG16,
+        'vgg19': apps.vgg19.VGG19,
+        'xception': apps.xception.Xception,
+    }
+
+    def __init__(self):
+        self.valid_paths = []
+        self.invalid_paths = []
+        self.lib_name = None
+        self.vector_buffer_size = None
+        self.index_buffer_size = None
+        self.pca_dim = None
+        self.model = None
+        self.layer_names = None
+        self._file_mapping = None
+        self._partitions = None
+        self._transformer = None
+        self._pca_id = None
+
+    @classmethod
+    @abstractmethod
+    def build(cls, image_dir, model, layer_range=None, pca_dim=None,
+              vector_buffer_size=100, index_buffer_size=6500):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def load(cls, lib_name, layer_range=None, model=None):
+        pass
+
+    @abstractmethod
+    def save(self, lib_name):
+        pass
+
+    @abstractmethod
+    def query(self, image_path, embedding_weights=None, n_results=5,
+              write_output=True):
+        pass
+
+    @property
+    def metadata(self):
+        return {
+            'model': self.model.name,
+            'layer_names': self.layer_names,
+            'paritions': self.partitions,
+            'pca': str(self._pca_id),
+        }
+
+    @property
+    def partitions(self):
+        if self._partitions is None:
+            input_dir = f'../data/indexes/{self.lib_name}/'
+            index_paths = glob.glob(os.path.join(input_dir, 'index-*.index'))
+            if not index_paths:
+                self._partitions = False
+            else:
+                sample_path = index_paths[0]
+                if 'part' in sample_path:
+                    self._partitions = False
+                    part_nums = set()
+                    for f in index_paths:
+                        info = re.search(f'{input_dir}index-(.+?)-part(.+?)\.index', f)
+                        part_num = info.group(2)
+                        part_nums.add(part_num)
+                    n_parts = max(part_nums)
+                    self._partitions = n_parts
+                else:
+                    self._partitions = False
+        return self._partitions
+
+    @partitions.setter
+    def partitions(self, value):
+        self._partitions = value
+
+    @property
+    def file_mapping(self):
+        if self._file_mapping:
+            pass
+        else:
+            self._file_mapping = {i: f for i, f in enumerate(self.valid_paths)}
+        return self._file_mapping
+
+    @file_mapping.setter
+    def file_mapping(self, value):
+        self._file_mapping = value
+
+
+class StyleStack(Stack):
     """
     This class is used to do style similarity search of a query image against
     a libaray of images. The search uses the l2 difference between the gram
@@ -53,35 +156,9 @@ class StyleStack:
         >>> results = stack.query(image_path, n_results, embedding_weights,
         >>>                       write_output=True)
     """
-
-    models = {
-        'densenet121': apps.densenet.DenseNet121,
-        'densenet169': apps.densenet.DenseNet169,
-        'densenet201': apps.densenet.DenseNet201,
-        'inceptionv3': apps.inception_v3.InceptionV3,
-        'inceptionresnetv2': apps.inception_resnet_v2.InceptionResNetV2,
-        'mobilenet': apps.mobilenet.MobileNet,
-        'mobilenetv2': apps.mobilenet_v2.MobileNetV2,
-        'nasnetlarge': apps.nasnet.NASNetLarge,
-        'nasnetmobile': apps.nasnet.NASNetMobile,
-        'resnet50': apps.resnet50.ResNet50,
-        'vgg16': apps.vgg16.VGG16,
-        'vgg19': apps.vgg19.VGG19,
-        'xception': apps.xception.Xception,
-    }
-
-    def __init__(self):
-        self.valid_paths = []
-        self.invalid_paths = []
-        self.lib_name = None
-        self.vector_buffer_size = None
-        self.index_buffer_size = None
-        self._file_mapping = None
-        self._partitioned = None
-
     @classmethod
-    def build(cls, image_dir, model, layer_range, vector_buffer_size=100,
-              index_buffer_size=6500):
+    def build(cls, image_dir, model, layer_range=None, pca_dim=None,
+              vector_buffer_size=1000, index_buffer_size=6500):
         """
         Use this constructor when you do not have a preexisting gram matrix
         library built by another instance of `StyleStack`.
@@ -130,15 +207,19 @@ class StyleStack:
         inst.lib_name = None
         inst.vector_buffer_size = vector_buffer_size
         inst.index_buffer_size = index_buffer_size
+        inst.pca_dim = pca_dim
         image_paths = get_image_paths(image_dir)
+        if isinstance(model, str):
+            model_cls = cls.models[model]
+            model = model_cls(weights='imagenet', include_top=False)
         inst.model = model
         inst._build_image_embedder(layer_range)
         inst._embedding_gen = inst._gen_lib_embeddings(image_paths)
-        inst._build_index(inst._embedding_gen)
+        inst._build_index()
         return inst
 
     @classmethod
-    def load(cls, lib_name, layer_range, model=None):
+    def load(cls, lib_name, layer_range=None, model=None):
         """
 
         Args:
@@ -160,7 +241,7 @@ class StyleStack:
         """
         input_dir = f'../data/indexes/{lib_name}/'
         inst = cls()
-        cls.lib_name = lib_name
+        inst.lib_name = lib_name
 
         # invalid paths have already been filtered out
         inst.invalid_paths = None
@@ -169,37 +250,42 @@ class StyleStack:
         with open(os.path.join(input_dir, 'meta.json')) as f:
             json_str = json.load(f)
             metadata = {str(k): v for k, v in json_str.items()}
+        inst._pca_id = metadata['pca']
+
+        # load model
         if model is None:
             model_str = metadata['model']
             model_cls = StyleStack.models[model_str]
             model = model_cls(weights='imagenet', include_top=False)
+        inst.model = model
+
+        # build embedder from model
+        inst._build_image_embedder(layer_range)
 
         # load file mapping
         with open(os.path.join(input_dir, 'file_mapping.json')) as f:
             json_str = json.load(f)
             inst.file_mapping = {int(k): str(v) for k, v in json_str.items()}
 
-        # load gram matrix indexes
+        # load indexes and check for partitioning
         index_paths = glob.glob(os.path.join(input_dir, 'grams-*.index'))
-
-        # check for partitioning
-        if 'part' in index_paths[0]:
+        sample_path = index_paths[0]
+        if 'part' in sample_path:
             inst.partitioned = True
 
-        # TODO: finish this
-        if inst.partitioned:
-            partition_dict = {
+        # load indexes into memory
+        if not inst.partitions:
+            inst.index_dict = {}
+            for f in index_paths:
+                index = faiss.read_index(f)
+                layer_name = re.search(f'{input_dir}grams-(.+?)\.index', f).group(1)
+                inst.index_dict.update({layer_name: index})
 
-            }
-
-        inst.index_dict = {}
-        for f in index_paths:
-            index = faiss.read_index(f)
-            layer_name = re.search(f'{input_dir}grams-(.+?)\.index', f).group(1)
-            inst.index_dict.update({layer_name: index})
-
-        # build embedder from model
-        inst._build_image_embedder(layer_range)
+        # set up generator to load partitions
+        else:
+            # TODO finish this
+            raise NotImplementedError(
+                'Loading partitioned indexes not implemented yet')
 
         return inst
 
@@ -220,19 +306,21 @@ class StyleStack:
         with open(mapping_path, 'w') as f:
             json.dump(self.file_mapping, f)
 
-        metadata = {
-            'model': self.model.name,
-        }
         metadata_path = os.path.join(output_dir, 'meta.json')
         with open(metadata_path, 'w') as f:
-            json.dump(metadata, f)
+            json.dump(self.metadata, f)
 
     def query(self, image_path, embedding_weights=None, n_results=5,
               write_output=True):
         # TODO: refactor
         # TODO: create seperate query class, which has attributes like distances by layer, etc. This will be cleaner and allow sliders without re-running query
-        query_embeddings = self._embed_image(image_path)
-        query_gram_dict = self._build_query_gram_dict(query_embeddings)
+        if not embedding_weights:
+            embedding_weights = {name: 1 for name in self.layer_names}
+
+        q_emb_list = self._embed_image(image_path)
+        q_emb_dict = {layer: q_emb_list[i]
+                      for i, layer in enumerate(self.layer_names) if layer in embedding_weights}
+        query_gram_dict = self._build_query_gram_dict(q_emb_dict)
 
         start = dt.datetime.now()
         proximal_indices = set()
@@ -292,49 +380,13 @@ class StyleStack:
                 json.dump(results, f)
         return results
 
-    @property
-    def metadata(self):
-        return {
-            'model': self.model.name,
-            'layer_names': self.layer_names,
-            'paritioned': self.partitioned,
-        }
-
-    @property
-    def partitioned(self):
-        if self._partitioned is None:
-            input_dir = f'../data/indexes/{self.lib_name}/'
-            indexes = glob.glob(os.path.join(input_dir, 'grams-*.index'))
-            if 'part' in indexes[0]:
-                return True
-            else:
-                return False
-        else:
-            return self._partitioned
-
-    @partitioned.setter
-    def partitioned(self):
-
-
-    @property
-    def file_mapping(self):
-        if self._file_mapping:
-            pass
-        else:
-            self._file_mapping = {i: f for i, f in enumerate(self.valid_paths)}
-        return self._file_mapping
-
-    @file_mapping.setter
-    def file_mapping(self, value):
-        self._file_mapping = value
-
     @staticmethod
     def gram_vector(x):
         if np.ndim(x) == 4 and x.shape[0] == 1:
             x = x[0, :]
         elif np.ndim != 3:
             # TODO: make my own error
-            raise ValueError(f'')
+            raise ValueError()
         x = x.reshape(x.shape[-1], -1)
         gram_mat = np.dot(x, np.transpose(x))
         mask = np.triu_indices(len(gram_mat), 1)
@@ -345,10 +397,13 @@ class StyleStack:
 
     def _build_query_gram_dict(self, img_embeddings):
         gram_dict = {}
-        for i, emb in enumerate(img_embeddings):
+        for layer, emb in img_embeddings.items():
             gram_vec = self.gram_vector(emb)
             gram_vec = np.expand_dims(gram_vec, axis=0)
-            gram_dict[self.layer_names[i]] = gram_vec
+            if self._pca_id:
+                transformer = self._load_transformer(self._pca_id, layer)
+                gram_vec = transformer.transform(gram_vec)
+            gram_dict[layer] = gram_vec
         return gram_dict
 
     def _build_image_embedder(self, layer_range=None):
@@ -390,22 +445,27 @@ class StyleStack:
         return image_embeddings
 
     # TODO: split into gen_gram_matrices and _build_index, then combine gen_gram_matrices with build_query_gram_dict
-    def _build_index(self, img_embedding_gen):
+    def _build_index(self):
         start = dt.datetime.now()
         in_memory = True
         part_num = 0
+        self.d_dict = {}
         self.index_dict = {}
         self.vector_buffer = [[] for _ in range(len(self.layer_names))]
-        for i, img_embeddings in enumerate(img_embedding_gen):
+        for i, img_embeddings in enumerate(self._embedding_gen):
 
             for k, emb in enumerate(img_embeddings):
+                layer = self.layer_names[k]
                 gram_vec = self.gram_vector(emb)
                 self.vector_buffer[k].append(gram_vec)
 
                 if i == 0:
-                    d = len(gram_vec)
-                    self.index_dict[f'{self.layer_names[k]}'] = \
-                        faiss.IndexFlatL2(d)
+                    if self.pca_dim:
+                        d = self.pca_dim    # int(len(gram_vec) * self.pca_frac)
+                    else:
+                        d = len(gram_vec)
+                    self.index_dict[layer] = faiss.IndexFlatL2(d)
+                    self.d_dict[layer] = d
 
             if i % self.vector_buffer_size == 0 and i > 0:
                 self._index_vectors()
@@ -417,6 +477,7 @@ class StyleStack:
                 self._save_indexes(self.lib_name, part_num)
 
         if self.vector_buffer:
+
             self._index_vectors()
             if not in_memory:
                 part_num += 1
@@ -431,9 +492,25 @@ class StyleStack:
         Helper method to move data from buffer to index when
         `vector_buffer_size` is reached
         """
+        if self.pca_dim:
+            self._pca_id = dt.datetime.now()
+
         for j, gram_list in enumerate(self.vector_buffer):
+            layer = self.layer_names[j]
             gram_block = np.stack(gram_list)
-            self.index_dict[self.layer_names[j]].add(gram_block)
+            if self.pca_dim:
+                n, d = gram_block.shape
+
+                # if more features than observations, PCA will return n
+                # components, so we change dimensionality to n
+                if n < d and self.index_dict[layer].ntotal == 0:
+                    self.index_dict[layer] = faiss.IndexFlatL2(n)
+                    self.d_dict[layer] = n
+                transformer = PCA(self.d_dict[layer])
+                gram_block = transformer.fit_transform(gram_block)
+                self._save_transformer(layer, transformer)
+
+            self.index_dict[layer].add(np.ascontiguousarray(gram_block))
             self.vector_buffer = [[] for _ in range(len(self.vector_buffer))]
 
     def _save_indexes(self, lib_name, part_num):
@@ -452,10 +529,27 @@ class StyleStack:
 
         # save metadata
         if part_num == 1:
-            metadata = {
-                'model': self.model.name,
-                'layer_names': self.layer_names,
-            }
             metadata_path = os.path.join(output_dir, 'meta.json')
             with open(metadata_path, 'w') as f:
-                json.dump(metadata, f)
+                json.dump(self.metadata, f)
+
+    def _save_transformer(self, layer_name, transformer):
+        transformer_dir = '../output/transformers/'
+        if not os.path.exists(transformer_dir):
+            os.makedirs(transformer_dir)
+        filename = f'pca-{self._pca_id}-{layer_name}'
+        transformer_path = os.path.join(transformer_dir, filename)
+        # with open(transformer_path, 'wb') as f:
+        job.dump(transformer, transformer_path)
+
+    def _load_transformer(self, pca_id, layer_name):
+        transformer_dir = '../output/transformers/'
+        filename = f'pca-{pca_id}-{layer_name}'
+        transformer_path = os.path.join(transformer_dir, filename)
+        # with open(transformer_path, 'rb') as f:
+        transformer = job.load(transformer_path)
+        return transformer
+
+
+class SemanticStack(Stack):
+    pass

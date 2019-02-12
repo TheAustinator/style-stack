@@ -69,14 +69,14 @@ def build_query_gram_dict(img_embeddings, layer_list):
     return gram_dict
 
 
-def build_gram_lib_index(images_embeddings, layer_names, buffer_size):
+def build_gram_lib_index(images_embeddings, layer_names, vector_buffer_size):
     start = dt.datetime.now()
     index_dict = {}
     gram_list_list = [[] for _ in range(len(layer_names))]
 
-    def _index_buffer():
+    def _index_vectors():
         """
-        Helper method to move data from buffer to index when `buffer_size` is
+        Helper method to move data from buffer to index when `vector_buffer_size` is
         reached
         """
         nonlocal gram_list_list
@@ -98,11 +98,11 @@ def build_gram_lib_index(images_embeddings, layer_names, buffer_size):
                 d = len(gram_flat)
                 index_dict[f'{layer_names[k]}'] = faiss.IndexFlatL2(d)
 
-        if i % buffer_size == 0 and i > 0:
-            _index_buffer()
+        if i % vector_buffer_size == 0 and i > 0:
+            _index_vectors()
 
     if gram_list_list:
-        _index_buffer()
+        _index_vectors()
     end = dt.datetime.now()
     index_time = (end - start).microseconds / 1000
     print(f'index time: {index_time} ms')
