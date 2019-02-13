@@ -208,8 +208,9 @@ class StyleStack(Stack):
         inst.vector_buffer_size = vector_buffer_size
         inst.index_buffer_size = index_buffer_size
         inst.pca_dim = pca_dim
-        image_paths_shuffled = random.shuffle(get_image_paths(image_dir))
-        image_paths = image_paths_shuffled[:max_files]
+        image_paths = get_image_paths(image_dir)
+        random.shuffle(image_paths)
+        image_paths = image_paths[:max_files]
         if isinstance(model, str):
             model_cls = cls.models[model]
             model = model_cls(weights='imagenet', include_top=False)
