@@ -50,8 +50,8 @@ class Stack(ABC):
 
     @classmethod
     @abstractmethod
-    def build(cls, image_dir, model, layer_range=None, pca_dim=None,
-              vector_buffer_size=100, index_buffer_size=6500):
+    def build(cls, image_dir, model, layer_range, pca_dim,
+              vector_buffer_size, index_buffer_size, max_files):
         pass
 
     @classmethod
@@ -158,7 +158,7 @@ class StyleStack(Stack):
     """
     @classmethod
     def build(cls, image_dir, model, layer_range=None, pca_dim=None,
-              vector_buffer_size=1000, index_buffer_size=6500):
+              vector_buffer_size=2000, index_buffer_size=5000, max_files=2000):
         """
         Use this constructor when you do not have a preexisting gram matrix
         library built by another instance of `StyleStack`.
@@ -208,7 +208,8 @@ class StyleStack(Stack):
         inst.vector_buffer_size = vector_buffer_size
         inst.index_buffer_size = index_buffer_size
         inst.pca_dim = pca_dim
-        image_paths = get_image_paths(image_dir)
+        image_paths_shuffled = random.shuffle(get_image_paths(image_dir))
+        image_paths = image_paths_shuffled[:max_files]
         if isinstance(model, str):
             model_cls = cls.models[model]
             model = model_cls(weights='imagenet', include_top=False)
@@ -379,6 +380,27 @@ class StyleStack(Stack):
             with open(output_file, 'w') as f:
                 json.dump(results, f)
         return results
+
+    def query_dist(self, query_img_path, ref_path_list, embedding_weights):
+        q_emb_list = self._embed_image(query_img_path)
+        q_emb_dict = {layer: q_emb_list[i]
+                      for i, layer in enumerate(self.layer_names) if layer in embedding_weights}
+        query_gram_dict = self._build_query_gram_dict(q_emb_dict)
+
+        start = dt.datetime.now()
+        dist_dict = {}
+        rev_file_mapping = {v: k for k, v in self.file_mapping.items()}
+        ref_indices = [rev_file_mapping[path] for path in ref_path_list]
+        for layer_name, gram in query_gram_dict.items():
+            labels_iter_range = list(range(1, len(ref_indices) + 1))
+            labels = np.array([list(ref_indices), labels_iter_range])
+            distances = np.empty((1, len(ref_indices)), dtype='float32')
+            self.index_dict[layer_name].compute_distance_subset(
+                1, faiss.swig_ptr(gram), len(ref_indices),
+                faiss.swig_ptr(distances), faiss.swig_ptr(labels))
+            distances = distances.flatten()
+            dist_dict[layer_name] = {idx: distances[i] for i, idx in
+                                     enumerate(ref_indices)}
 
     @staticmethod
     def gram_vector(x):
@@ -552,4 +574,18 @@ class StyleStack(Stack):
 
 
 class SemanticStack(Stack):
-    pass
+    @classmethod
+    def build(cls, image_dir, model, layer_range=None, pca_dim=None,
+              vector_buffer_size=100, index_buffer_size=6500, max_files=2000):
+        pass
+
+    @classmethod
+    def load(cls, lib_name, layer_range=None, model=None):
+        pass
+
+    def save(self, lib_name):
+        pass
+
+    def query(self, image_path, embedding_weights=None, n_results=5,
+              write_output=True):
+        pass

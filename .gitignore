@@ -9,6 +9,13 @@ output
 .idea/
 Pipfile
 
+# local files
+style_stack/style_similarity_search_prototype.ipynb
+style_stack/batch_tests.py
+style_stack/styles.json
+style_stack/analysis.py
+style_stack/tag_dict.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
