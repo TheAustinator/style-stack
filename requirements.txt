@@ -1,8 +1,9 @@
 keras
 numpy
 matplotlib
-keras
 scipy
+joblib
+pillow
 scikit-learn
 # To install these Python dependencies, please type:
-# pip install -r requirements.txt
+# conda install -r requirements.txt

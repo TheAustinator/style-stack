@@ -1,6 +1,6 @@
 from keras.applications.vgg16 import VGG16
 
-from gram_stack import StyleStack
+from style_stack import StyleStack
 
 
 def main():

@@ -137,3 +137,25 @@ if __name__ == '__main__':
     paths = [join(out_dir, f) for f in listdir(out_dir) if isfile(join(out_dir, f))]
     for path in paths:
         plot_results(path)
+
+
+def _legacy_save_gram_lib(lib_name, gram_lib, file_mapping):
+    for layer_name, gram_stack in gram_lib.items():
+        np.save(f'{lib_name}-grams-{layer_name}.npy', gram_stack)
+        with open(f'{lib_name}-file_mapping.json', 'w') as f:
+            json.dump(file_mapping, f)
+
+
+def _legacy_load_gram_lib(lib_name):
+    with open(f'{lib_name}-file_mapping.json') as f:
+        index_str = json.load(f)
+        file_index = {int(k): str(v) for k, v in index_str.items()}
+
+    gram_lib = {}
+    gram_layer_files = sorted(glob.glob(f'{lib_name}-grams-*.npy'))
+    for f in gram_layer_files:
+        layer_name = re.search(f'{lib_name}-grams-(.+?)\.npy', f).group(1)
+        gram_stack = np.load(f)
+        gram_lib.update({layer_name: gram_stack})
+
+    return file_index, gram_lib
