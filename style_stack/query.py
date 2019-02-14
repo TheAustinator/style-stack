@@ -13,7 +13,6 @@ def main(query_path, similarity_weights, k):
     lib_name = 'test_1'
 
     model = VGG16(weights='imagenet', include_top=True)
-    image_paths = get_image_paths('../data/raw')
     images_embeddings, layer_names, _ = gen_images_embeddings([query_path], model)
     query_layer_names = list(similarity_weights)
 
