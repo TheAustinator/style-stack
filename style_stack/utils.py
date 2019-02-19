@@ -59,8 +59,8 @@ def plot_results(results):
     query_img_path = results['query_img']
 
     query_img = image.load_img(query_img_path)
-    results_img_1 = get_concatenated_images(results_files[:5])
-    results_img_2 = get_concatenated_images(results_files[5:])
+    results_img_1 = get_concatenated_images(results_files[:3])
+    results_img_2 = get_concatenated_images(results_files[3:])
 
     plt.figure(figsize=(8, 8))
     plt.subplot2grid((3, 1), (0, 0))

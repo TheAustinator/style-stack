@@ -1,4 +1,4 @@
-from abc import ABC, abstractclassmethod, abstractmethod
+from abc import ABC, abstractmethod
 import datetime as dt
 import faiss
 import glob
@@ -74,7 +74,7 @@ class Stack(ABC):
             'model': self.model.name,
             'layer_names': self.layer_names,
             'paritions': self.partitions,
-            'pca': str(self._pca_id),
+            'pca': self._pca_id,
         }
 
     @property
@@ -316,6 +316,8 @@ class StyleStack(Stack):
               write_output=True):
         # TODO: refactor
         # TODO: create seperate query class, which has attributes like distances by layer, etc. This will be cleaner and allow sliders without re-running query
+        self._check_inputs_query(image_path, embedding_weights, n_results,
+                                 write_output)
         if not embedding_weights:
             embedding_weights = {name: 1 for name in self.layer_names}
 
@@ -382,7 +384,7 @@ class StyleStack(Stack):
                 json.dump(results, f)
         return results
 
-    def query_dist(self, query_img_path, ref_path_list, embedding_weights):
+    def query_distance(self, query_img_path, ref_path_list, embedding_weights):
         q_emb_list = self._embed_image(query_img_path)
         q_emb_dict = {layer: q_emb_list[i]
                       for i, layer in enumerate(self.layer_names) if layer in embedding_weights}
@@ -572,6 +574,43 @@ class StyleStack(Stack):
         # with open(transformer_path, 'rb') as f:
         transformer = job.load(transformer_path)
         return transformer
+
+    def _check_inputs_build(self):
+        pass
+
+    def _check_inputs_load(self):
+        pass
+
+    def _check_inputs_query(self, image_path, embedding_weights, n_results,
+                            write_output):
+        if not os.path.exists(image_path):
+            raise ValueError(
+                f'`image_path`: {image_path} input argument to '
+                f'`StyleStack.query` cannot be found.'
+            )
+        if embedding_weights:
+            for layer in embedding_weights:
+                if layer not in self.layer_names:
+                    raise ValueError(
+                        f'input: {layer} in `embedding_weights` argument to '
+                        f'`StyleStack.query` not in `StyleStack.layer_names`. '
+                        f'Please use `StyleStack.build` to make a new style '
+                        f'stack with desired layers or ensure that '
+                        f'`embedding_weights` keys are a subset of: '
+                        f'{self.layer_names}')
+
+        if n_results:
+            if not isinstance(n_results, int):
+                raise ValueError(
+                    f'`StyleStack.query` argument, `n_results`, must be `int`.'
+                    f'Got `{type(n_results)}`')
+
+        if write_output:
+            if not isinstance(write_output, bool):
+                raise ValueError(
+                    f'`StyleStack.query` argument, `write_output`, must be '
+                    f'`bool`.'
+                    f'Got `{type(write_output)}`')
 
 
 class SemanticStack(Stack):
