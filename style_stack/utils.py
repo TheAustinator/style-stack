@@ -43,6 +43,11 @@ def get_concatenated_images(image_paths, thumb_height=300):
     return concat_image
 
 
+def get_concatenated_matrices(matrices, thumb_height=300):
+    concat_matrices = np.concatenate([np.asarray(t) for mat in matrices], axis=1)
+    return concat_matrices
+
+
 def plot_results(results):
     if isinstance(results, str):
         with open(results) as f:
